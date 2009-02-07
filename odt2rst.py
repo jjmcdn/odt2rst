@@ -481,6 +481,7 @@ class RstDocument:
 		column_widths = table.getColumnWidths()
 
 		bottom = ""
+		previous_header = False
 		for row_index in range(len(table.rows)):
 			row = table.rows[row_index]
 
@@ -498,7 +499,10 @@ class RstDocument:
 
 						top_char = " "
 						if cursor_cell.top_wall:
-							top_char = "-"
+							if previous_header:
+								top_char = "="
+							else:
+								top_char = "-"
 
 						cross_char = "+"
 						if not cursor_cell.top_wall and not cursor_cell.left_wall:
@@ -518,7 +522,10 @@ class RstDocument:
 						cursor_cell = row.cells[cursor_column_index]
 						top_char = " "
 						if cursor_cell.top_wall:
-							top_char = "-"
+							if previous_header:
+								top_char = "="
+							else:
+								top_char = "-"
 
 						top +=  "+" + top_char * column_widths[cursor_column_index]
 
@@ -536,6 +543,9 @@ class RstDocument:
 
 			self.write(top)
 			self.write(body)
+			
+			previous_header = row.header
+			print row.header
 
 		self.write(bottom)		
 
@@ -590,12 +600,14 @@ class RstDocument:
 			row_node = child
 			if child.tag == table_prefix + "table-header-rows":
 				header = True
+				print "header"
 				row_node = child[0]
 
 			if row_node.tag != table_prefix + "table-row":
 				continue
 
 			row = TableRow()
+			row.header = header
 			table.rows.append(row)
 
 			for cell_node in row_node:
