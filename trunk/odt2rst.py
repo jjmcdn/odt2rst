@@ -14,7 +14,79 @@ table_prefix = "{urn:oasis:names:tc:opendocument:xmlns:table:1.0}"
 drawing_prefix = "{urn:oasis:names:tc:opendocument:xmlns:drawing:1.0}"
 xlink_prefix = "{http://www.w3.org/1999/xlink}"
 
-debug = False
+debug_flag = False
+
+
+def unpackOdt(input_path, temp_folder = "."):
+	"Unpack the odt file into the temp folder and return a dictionary translating .png file path into they hashes."
+	odtfile = zipfile.ZipFile(input_path)
+
+	try:
+		os.mkdir(temp_folder)
+	except:
+		pass
+
+	try:
+		os.mkdir(os.path.join(temp_folder, "Pictures"))
+	except:
+		pass
+
+	odt_pictures_hashes = {}
+	for path in odtfile.namelist():
+		if path.lower() == "content.xml".lower():
+			g = open(os.path.join(temp_folder, path), "wb")
+			bytes = odtfile.read(path)
+			g.write(bytes)
+			g.close()
+
+		folder, name = os.path.split(path)
+		name, ext = os.path.splitext(name)
+		if folder.lower() == "Pictures".lower() and ext in [".png", ".jpg"]:
+			g = open(os.path.join(temp_folder, path), "wb")
+			bytes = odtfile.read(path)
+			g.write(bytes)
+			g.close()
+
+			h = hashlib.md5()
+			h.update(bytes)
+			h = h.digest()
+			odt_pictures_hashes[path] = h
+
+	return odt_pictures_hashes
+
+
+def cleanPack(temp_folder = "."):
+	"Delete the files and folder created by unpackOdt apart from the temp_folder itself."
+	os.remove(os.path.join(temp_folder, "content.xml"))
+	shutil.rmtree(os.path.join(temp_folder, "Pictures"))
+	
+
+def getHashesRstImages(output_folder, images_relative_folder):
+	"Return a dictonary translating hash into the its .png file path."
+	hashes_rst_images = {}
+	
+	image_folder = os.path.join(output_folder, images_relative_folder)
+	
+	if not os.path.isdir(image_folder):
+		return {}
+
+	for path in os.listdir(image_folder):
+		name, ext = os.path.splitext(path)
+		if ext not in [".png", ".jpg"]:
+			continue
+
+		path = os.path.join(images_relative_folder, path)
+
+		f = open(path, "rb")
+		bytes = f.read()
+		f.close()
+
+		h = hashlib.md5()
+		h.update(bytes)
+		h = h.digest()
+		hashes_rst_images[h] = path
+
+	return hashes_rst_images
 
 
 def splitIntoLines(text):
@@ -23,7 +95,7 @@ def splitIntoLines(text):
 	return text
 
 
-class Context:
+class RstDocument:
 	# Set here the char that should be used to underline the titles according to they levels.
 	# The default is the Python convention for documentation.
 	levelchars = ["#", "*", "=", "-", "^", '"']
@@ -44,7 +116,7 @@ class Context:
 	def flush(self):
 		for paragraph in self.paragraphs:
 			text = paragraph
-			if debug:
+			if debug_flag:
 				text += "endof para"
 			text += "\n"
 			self.file.write(text)
@@ -75,7 +147,7 @@ class Context:
 
 	def writeTitle(self, text, level):
 		paragraph = ""
-		if debug:
+		if debug_flag:
 			paragraph += "pre-title"
 		paragraph += "\n"
 		char = self.levelchars[level]
@@ -91,12 +163,12 @@ class Context:
 
 		paragraph = ""
 		if not self.list_levels:
-			if debug:
+			if debug_flag:
 				paragraph += "pre-para"
 			paragraph += "\n"
 			
 		elif not self.list_levels[-1]:
-			if debug:
+			if debug_flag:
 				paragraph += "pre-item"
 			paragraph += "\n"
 			
@@ -211,7 +283,6 @@ def getElementText(context, element):
 				text += child.text
 				
 		elif child.tag == drawing_prefix + "frame":
-			print "frame"
 			if child[0].tag == drawing_prefix + "image":
 				image = child[0]
 				path = image.attrib[xlink_prefix + "href"]
@@ -596,79 +667,55 @@ def transform(context, element):
 			writeTable(context, child)
 
 
-def unpackOdt(input_path, temp_folder = "."):
-	odtfile = zipfile.ZipFile(input_path)
+def odt2rst(input_path, output_path, images_relative_folder = "images", temp_folder = ".", clean = True):
+	odt_pictures_hashes = unpackOdt(input_path, temp_folder)
+	
+	output_folder, output_name = os.path.split(output_path)
+	image_folder = os.path.join(output_folder, images_relative_folder)
+	
+	hashes_rst_images = getHashesRstImages(output_folder, images_relative_folder)
 
-	try:
-		os.mkdir(temp_folder)
-	except:
-		pass
-
-	try:
-		os.mkdir(os.path.join(temp_folder, "Pictures"))
-	except:
-		pass
-
-	odt_pictures_hashes = {}
-	for path in odtfile.namelist():
-		if path.lower() == "content.xml".lower():
-			g = open(os.path.join(temp_folder, path), "wb")
-			bytes = odtfile.read(path)
-			g.write(bytes)
-			g.close()
-
-		folder, name = os.path.split(path)
-		name, ext = os.path.splitext(name)
-		if folder.lower() == "Pictures".lower() and ext == ".png":
-			g = open(os.path.join(temp_folder, path), "wb")
-			bytes = odtfile.read(path)
-			g.write(bytes)
-			g.close()
-
-			h = hashlib.md5()
-			h.update(bytes)
-			h = h.digest()
-			odt_pictures_hashes[path] = h
-
-	return os.path.join(temp_folder, "content.xml"), odt_pictures_hashes
-
-
-def cleanPack(temp_folder = "."):
-	os.remove(os.path.join(temp_folder, "content.xml"))
-	shutil.rmtree(os.path.join(temp_folder, "Pictures"))
-
-
-def getPictureDict(folder_path):
-	rst_md5_images_hashes = {}
-
-	for path in os.listdir(folder_path):
-		name, ext = os.path.splitext(path)
-		if ext != ".png":
-			continue
-
-		path = os.path.join(folder_path, path)
-
-		f = open(path, "rb")
-		bytes = f.read()
-		f.close()
-
-		h = hashlib.md5()
-		h.update(bytes)
-		h = h.digest()
-		rst_md5_images_hashes[h] = path
-
-	return rst_md5_images_hashes
-
-
-def odt2rst(input_path, output_path, images_folder = "images", temp_folder = ".", clean = True):
-	content_path, odt_pictures_hashes = unpackOdt(input_path, temp_folder)
-	rst_md5_images_hashes = getPictureDict(images_folder)
-
+	# Build the picture_dict that convert odt image path into rst image path (when possible)
+	picture_prefix = "picture_"
+	existing_picture_names = []
+	if os.path.isdir(image_folder):
+		for path in os.listdir(image_folder):
+			path = path.lower()
+			name, ext = os.path.splitext(path)
+			if ext not in [".png", ".jpg"]:
+				continue
+	
+			if not name.startswith(picture_prefix):
+				continue
+	
+			existing_picture_names.append(name)
+			
 	picture_dict = {}
+	picture_index = 0
 	for path in odt_pictures_hashes:
 		h = odt_pictures_hashes[path]
-		if h in rst_md5_images_hashes:
-			picture_dict[path] = rst_md5_images_hashes[h]
+		if h in hashes_rst_images:
+			picture_dict[path] = hashes_rst_images[h]
+		else:
+			# Find an available picture name:
+			while picture_prefix + str(picture_index) in existing_picture_names:
+				picture_index += 1
+				
+			picture_name = picture_prefix + str(picture_index)
+			existing_picture_names.append(picture_name)
+			
+			name, ext = os.path.splitext(path)
+			picture_relative_path = os.path.join(images_relative_folder, picture_name) + ext
+
+			if not os.path.isdir(image_folder):
+				os.mkdir(image_folder)
+				
+			shutil.copyfile(os.path.join(temp_folder, path), os.path.join(output_folder, picture_relative_path))
+			
+			picture_dict[path] = picture_relative_path
+			
+	content_path = os.path.join(temp_folder, "content.xml")
+	styles_path = os.path.join(temp_folder, "styles.xml")
 
 	parser = xml.etree.ElementTree.XMLTreeBuilder()
 	doc = xml.etree.ElementTree.parse(content_path, parser)
@@ -676,7 +723,7 @@ def odt2rst(input_path, output_path, images_folder = "images", temp_folder = "."
 	body = doc.find(office_prefix + "body")
 	text = body.find(office_prefix + "text")
 
-	context = Context(output_path)
+	context = RstDocument(output_path)
 	context.picture_dict = picture_dict
 
 	context.open()
@@ -697,7 +744,7 @@ def help():
 
 def main():
 	opts, args = getopt.getopt(sys.argv[1:], "vh", ["version", "help", "do-not-clean", "images=", "temp="])
-	images_folder = "images"
+	images_relative_folder = "images"
 	temp_folder = "."
 	clean = True
 	for o, v in opts:
@@ -710,7 +757,7 @@ def main():
 			return
 
 		if o in ["--images"]:
-			images_folder = v
+			images_relative_folder = v
 
 		if o in ["--temp"]:
 			temp_folder = v
@@ -730,12 +777,12 @@ def main():
 	if len(args) >= 2:
 		output_file = args[1]
 
-	print "input", input_file
-	print "output:", output_file
-	print "temp:", temp_folder
-	print "images:", images_folder
+#	print "input", input_file
+#	print "output:", output_file
+#	print "temp:", temp_folder
+#	print "images:", images_relative_folder
 
-	odt2rst(input_file, output_file, images_folder = images_folder, temp_folder = temp_folder, clean = clean)
+	odt2rst(input_file, output_file, images_relative_folder = images_relative_folder, temp_folder = temp_folder, clean = clean)
 
 
 if __name__ == "__main__":
