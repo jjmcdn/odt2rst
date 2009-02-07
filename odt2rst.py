@@ -187,6 +187,121 @@ def escapeCellText(text):
 	text = text.replace("|", "\\|")
 	return text
 	
+	
+class Table:
+	def __init__(self):
+		self.rows = []
+
+	def __str__(self):
+		ret = "Table(\n"
+		ret += "  rows : [\n"
+		for row in self.rows:
+			ret += str(row) + ",\n"
+		ret += "  ]\n"
+		ret += ")\n"
+
+		return ret
+
+	def addCoveredCells(self):
+		num_columns = 0
+		row  = self.rows[0]
+		for cell in row.cells:
+			num_columns += cell.h_span
+
+		grid = [[None for i in range(num_columns)] for j in range(len(self.rows))]
+
+		for row_index in range(len(self.rows)):
+			row = self.rows[row_index]
+
+			column_index = 0
+			for cell in row.cells:
+				while column_index < num_columns and grid[row_index][column_index]:
+					column_index += 1
+
+				grid[row_index][column_index] = cell
+				for extra_column_index in range(cell.h_span):
+					for extra_row_index in range(cell.v_span):
+						if extra_column_index == 0 and extra_row_index == 0:
+							continue
+						covered_cell = TableCell()
+						grid[row_index + extra_row_index][column_index + extra_column_index] = covered_cell
+						covered_cell.covered = True
+
+						if extra_column_index:
+							covered_cell.left_wall = False
+
+						if extra_row_index:
+							covered_cell.top_wall = False
+
+		for row_index in range(len(self.rows)):
+			row = self.rows[row_index]
+
+			row.cells = grid[row_index]
+
+	def getColumnWidths(self):
+		column_widths = []
+
+		for row in self.rows:
+			column_index = 0
+			while column_index < len(row.cells):
+				cell = row.cells[column_index]
+
+				if cell.covered:
+					column_index += 1
+					continue
+
+				while len(column_widths) < column_index + cell.h_span:
+					column_widths.append(0)
+
+				actual_width = sum(column_widths[column_index : column_index + cell.h_span]) + cell.h_span - 1
+				width = len(cell.text) + 2
+				if width > actual_width:
+					addition = int(math.ceil((width - actual_width) / float(cell.h_span)))
+					for index in range(column_index, column_index + cell.h_span):
+						column_widths[index] += addition
+
+				column_index += cell.h_span
+
+		return column_widths
+
+
+class TableRow:
+	def __init__(self):
+		self.header = False
+		self.cells = []
+
+	def __str__(self):
+		ret = "Row(\n"
+		ret += "  rows : [\n"
+		for cell in self.cells:
+			ret += str(cell) + ",\n"
+		ret += "  ]\n"
+		ret += ")\n"
+
+		return ret
+
+
+class TableCell:
+	def __init__(self):
+		self.h_span = 1
+		self.v_span = 1
+
+		self.text = ""
+
+		self.covered = False
+		self.top_wall = True
+		self.left_wall = True
+
+	def __str__(self):
+		ret = "Cell(\n"
+		ret += "  h_span : %d,\n" % self.h_span
+		ret += "  v_span : %d,\n" % self.v_span
+		ret += '  text : "%s",\n' % self.text
+		ret += '  covered : %d,\n' % self.covered
+		ret += ")\n"
+
+		return ret
+	
 
 class RstDocument:
 	# Set here the char that should be used to underline the titles according to they levels.
@@ -596,121 +711,19 @@ class RstDocument:
 
 			if child.tag == table_prefix + "table":
 				self.transformTableNode(child)
+				
+	def transform(self, content_path, styles_path, picture_dict):
+		self.picture_dict = picture_dict
+		
+		parser = xml.etree.ElementTree.XMLTreeBuilder()
+		doc = xml.etree.ElementTree.parse(content_path, parser)
+	
+		body = doc.find(office_prefix + "body")
+		text = body.find(office_prefix + "text")
 
-
-class Table:
-	def __init__(self):
-		self.rows = []
-
-	def __str__(self):
-		ret = "Table(\n"
-		ret += "  rows : [\n"
-		for row in self.rows:
-			ret += str(row) + ",\n"
-		ret += "  ]\n"
-		ret += ")\n"
-
-		return ret
-
-	def addCoveredCells(self):
-		num_columns = 0
-		row  = self.rows[0]
-		for cell in row.cells:
-			num_columns += cell.h_span
-
-		grid = [[None for i in range(num_columns)] for j in range(len(self.rows))]
-
-		for row_index in range(len(self.rows)):
-			row = self.rows[row_index]
-
-			column_index = 0
-			for cell in row.cells:
-				while column_index < num_columns and grid[row_index][column_index]:
-					column_index += 1
-
-				grid[row_index][column_index] = cell
-				for extra_column_index in range(cell.h_span):
-					for extra_row_index in range(cell.v_span):
-						if extra_column_index == 0 and extra_row_index == 0:
-							continue
-						covered_cell = TableCell()
-						grid[row_index + extra_row_index][column_index + extra_column_index] = covered_cell
-						covered_cell.covered = True
-
-						if extra_column_index:
-							covered_cell.left_wall = False
-
-						if extra_row_index:
-							covered_cell.top_wall = False
-
-		for row_index in range(len(self.rows)):
-			row = self.rows[row_index]
-
-			row.cells = grid[row_index]
-
-	def getColumnWidths(self):
-		column_widths = []
-
-		for row in self.rows:
-			column_index = 0
-			while column_index < len(row.cells):
-				cell = row.cells[column_index]
-
-				if cell.covered:
-					column_index += 1
-					continue
-
-				while len(column_widths) < column_index + cell.h_span:
-					column_widths.append(0)
-
-				actual_width = sum(column_widths[column_index : column_index + cell.h_span]) + cell.h_span - 1
-				width = len(cell.text) + 2
-				if width > actual_width:
-					addition = int(math.ceil((width - actual_width) / float(cell.h_span)))
-					for index in range(column_index, column_index + cell.h_span):
-						column_widths[index] += addition
-
-				column_index += cell.h_span
-
-		return column_widths
-
-
-class TableRow:
-	def __init__(self):
-		self.header = False
-		self.cells = []
-
-	def __str__(self):
-		ret = "Row(\n"
-		ret += "  rows : [\n"
-		for cell in self.cells:
-			ret += str(cell) + ",\n"
-		ret += "  ]\n"
-		ret += ")\n"
-
-		return ret
-
-
-class TableCell:
-	def __init__(self):
-		self.h_span = 1
-		self.v_span = 1
-
-		self.text = ""
-
-		self.covered = False
-		self.top_wall = True
-		self.left_wall = True
-
-	def __str__(self):
-		ret = "Cell(\n"
-		ret += "  h_span : %d,\n" % self.h_span
-		ret += "  v_span : %d,\n" % self.v_span
-		ret += '  text : "%s",\n' % self.text
-		ret += '  covered : %d,\n' % self.covered
-		ret += ")\n"
-
-		return ret
+		self.open()
+		self.transformNode(text)
+		self.close()
 
 
 def odt2rst(input_path, output_path, images_relative_folder = "images", temp_folder = ".", clean = True):
@@ -721,18 +734,8 @@ def odt2rst(input_path, output_path, images_relative_folder = "images", temp_fol
 	content_path = os.path.join(temp_folder, "content.xml")
 	styles_path = os.path.join(temp_folder, "styles.xml")
 
-	parser = xml.etree.ElementTree.XMLTreeBuilder()
-	doc = xml.etree.ElementTree.parse(content_path, parser)
-
-	body = doc.find(office_prefix + "body")
-	text = body.find(office_prefix + "text")
-
-	context = RstDocument(output_path)
-	context.picture_dict = picture_dict
-
-	context.open()
-	context.transformNode(text)
-	context.close()
+	rst_document = RstDocument(output_path)
+	rst_document.transform(content_path, styles_path, picture_dict)
 
 	if clean:
 		cleanPack(temp_folder)
