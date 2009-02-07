@@ -59,14 +59,14 @@ def cleanPack(temp_folder = "."):
 	"Delete the files and folder created by unpackOdt apart from the temp_folder itself."
 	os.remove(os.path.join(temp_folder, "content.xml"))
 	shutil.rmtree(os.path.join(temp_folder, "Pictures"))
-	
+
 
 def getHashesRstImages(output_folder, images_relative_folder):
 	"Return a dictonary translating hash into the its .png file path."
 	hashes_rst_images = {}
-	
+
 	image_folder = os.path.join(output_folder, images_relative_folder)
-	
+
 	if not os.path.isdir(image_folder):
 		return {}
 
@@ -89,11 +89,104 @@ def getHashesRstImages(output_folder, images_relative_folder):
 	return hashes_rst_images
 
 
+def synchronizeImagesFolders(temp_folder, output_path, images_relative_folder, odt_pictures_hashes):
+	output_folder, output_name = os.path.split(output_path)
+	image_folder = os.path.join(output_folder, images_relative_folder)
+
+	hashes_rst_images = getHashesRstImages(output_folder, images_relative_folder)
+
+	# Build the picture_dict that convert odt image path into rst image path (when possible)
+	picture_prefix = "picture_"
+	existing_picture_names = []
+	if os.path.isdir(image_folder):
+		for path in os.listdir(image_folder):
+			path = path.lower()
+			name, ext = os.path.splitext(path)
+			if ext not in [".png", ".jpg"]:
+				continue
+
+			if not name.startswith(picture_prefix):
+				continue
+
+			existing_picture_names.append(name)
+
+	picture_dict = {}
+	picture_index = 0
+	for path in odt_pictures_hashes:
+		h = odt_pictures_hashes[path]
+		if h in hashes_rst_images:
+			picture_dict[path] = hashes_rst_images[h]
+		else:
+			# Find an available picture name:
+			while picture_prefix + str(picture_index) in existing_picture_names:
+				picture_index += 1
+
+			picture_name = picture_prefix + str(picture_index)
+			existing_picture_names.append(picture_name)
+
+			name, ext = os.path.splitext(path)
+			picture_relative_path = os.path.join(images_relative_folder, picture_name) + ext
+
+			if not os.path.isdir(image_folder):
+				os.mkdir(image_folder)
+
+			shutil.copyfile(os.path.join(temp_folder, path), os.path.join(output_folder, picture_relative_path))
+
+			picture_dict[path] = picture_relative_path
+
+	return picture_dict
+
+
 def splitIntoLines(text):
 	text = re.sub(r"([a-zA-Z\"']{2})\. ", r"\1.\n", text)
 
 	return text
 
+def getRawText(node):
+	text = ""
+	if node.text:
+		text += node.text
+	for child in node:
+		if child.tag in [text_prefix + "p", text_prefix + "span"]:
+			text += getRawText(child)
+
+		if child.tail:
+			text += child.tail
+
+	text = text.replace("\n", " ")
+	return text
+
+
+def getCodeText(node):
+	text = ""
+	if node.text:
+		text += node.text
+	for child in node:
+		if child.tag in [text_prefix + "p", text_prefix + "span"]:
+			text += getCodeText(child)
+
+		if child.tag == text_prefix + "line-break":
+			text += "\n"
+
+		if child.tag == text_prefix + "s":
+			identation = int(child.attrib[text_prefix + "c"])
+			identation = " " * identation
+
+			text += identation
+
+		if child.tail:
+			text += child.tail
+
+	return text
+
+	
+def escapeCellText(text):
+	"Return a rst version of the text that is suitable for rst cell content."
+	text = text.replace("+", "\\+")
+	text = text.replace("-", "\\-")
+	text = text.replace("|", "\\|")
+	return text
+	
 
 class RstDocument:
 	# Set here the char that should be used to underline the titles according to they levels.
@@ -107,12 +200,12 @@ class RstDocument:
 
 		self.list_levels = []
 		self.list_indexes = []
-		
+
 		self.picture_dict = {}
-		
+
 		self.inline_images = {}
 		self.paragraphs = []
-		
+
 	def flush(self):
 		for paragraph in self.paragraphs:
 			text = paragraph
@@ -120,7 +213,7 @@ class RstDocument:
 				text += "endof para"
 			text += "\n"
 			self.file.write(text)
-			
+
 		self.paragraphs = []
 
 	def open(self, path = ""):
@@ -130,11 +223,11 @@ class RstDocument:
 
 	def close(self):
 		self.flush()
-		
+
 		for path in self.inline_images:
 			name = self.inline_images[path]
 			self.file.write("\n.. |%s| image:: %s\n" % (name, path))
-		
+
 		self.file.close()
 
 	def write(self, s):
@@ -166,12 +259,12 @@ class RstDocument:
 			if debug_flag:
 				paragraph += "pre-para"
 			paragraph += "\n"
-			
+
 		elif not self.list_levels[-1]:
 			if debug_flag:
 				paragraph += "pre-item"
 			paragraph += "\n"
-			
+
 		identation = ""
 		bullet = ""
 		non_bullet = ""
@@ -188,8 +281,8 @@ class RstDocument:
 					bullet = " - "
 
 			self.list_levels[-1] = False
-			
-			for i in self.list_indexes[:-1]:	
+
+			for i in self.list_indexes[:-1]:
 				if i >= 0:
 					identation += "    "
 				else:
@@ -200,7 +293,7 @@ class RstDocument:
 		text = text.split("\n")
 
 		paragraph += identation + bullet + ("\n" + identation + non_bullet).join(text)
-		
+
 		self.paragraphs.append(paragraph)
 
 	def writeDefinitionBody(self, text):
@@ -209,7 +302,7 @@ class RstDocument:
 
 			paragraph = paragraph.replace("**", "")
 			self.write(paragraph)
-		
+
 		text = splitIntoLines(text)
 		text = text.split("\n")
 
@@ -265,112 +358,16 @@ class RstDocument:
 		while text:
 			self.write("   " + text.pop(0) + "\n")
 		self.write("\n")
+		
+	def writeTable(self, table):
+		self.write("\n")
 
-
-def getElementText(context, element):
-	text = ""
-	if element.text:
-		text += element.text
-	for child in element:
-		if child.tag == text_prefix + "span":
-			if child.attrib[text_prefix + "style-name"] in ["rststyle-emphasis"]:
-				text += "*%s*" % child.text
-
-			elif child.attrib[text_prefix + "style-name"] in ["rststyle-strong"]:
-				text += "**%s**" % child.text
-
-			else:
-				text += child.text
-				
-		elif child.tag == drawing_prefix + "frame":
-			if child[0].tag == drawing_prefix + "image":
-				image = child[0]
-				path = image.attrib[xlink_prefix + "href"]
-				if path in context.picture_dict:
-					path = context.picture_dict[path]
-				path = path.replace('\\', '/')
-				
-				folder, name = os.path.split(path)
-				name, ext = os.path.splitext(name)
-				
-				text += "|%s|" % name
-				
-				context.inline_images[path] = name
-
-		elif child.tag == text_prefix + "p":
-			text += getElementText(context, child)
-			
-		else:
-			print child.tag
-
-		if child.tail:
-			text += child.tail
-
-	text = text.replace("\n", " ")
-	return text
-
-
-def getRawText(element):
-	text = ""
-	if element.text:
-		text += element.text
-	for child in element:
-		if child.tag in [text_prefix + "p", text_prefix + "span"]:
-			text += getRawText(child)
-
-		if child.tail:
-			text += child.tail
-
-	text = text.replace("\n", " ")
-	return text
-
-
-def getCodeText(element):
-	text = ""
-	if element.text:
-		text += element.text
-	for child in element:
-		if child.tag in [text_prefix + "p", text_prefix + "span"]:
-			text += getCodeText(child)
-
-		if child.tag == text_prefix + "line-break":
-			text += "\n"
-
-		if child.tag == text_prefix + "s":
-			identation = int(child.attrib[text_prefix + "c"])
-			identation = " " * identation
-
-			text += identation
-
-		if child.tail:
-			text += child.tail
-
-	return text
-
-
-class Table:
-	def __init__(self):
-		self.rows = []
-
-	def __str__(self):
-		ret = "Table(\n"
-		ret += "  rows : [\n"
-		for row in self.rows:
-			ret += str(row) + ",\n"
-		ret += "  ]\n"
-		ret += ")\n"
-
-		return ret
-
-	def writeTable(self, context):
-		context.write("\n")
-
-		self.addCoveredCells()
-		column_widths = self.getColumnWidths()
+		table.addCoveredCells()
+		column_widths = table.getColumnWidths()
 
 		bottom = ""
-		for row_index in range(len(self.rows)):
-			row = self.rows[row_index]
+		for row_index in range(len(table.rows)):
+			row = table.rows[row_index]
 
 			top = ""
 			body = ""
@@ -422,10 +419,198 @@ class Table:
 
 			body += "|\n"
 
-			context.write(top)
-			context.write(body)
+			self.write(top)
+			self.write(body)
 
-		context.write(bottom)
+		self.write(bottom)		
+
+	def getElementText(self, node):
+		text = ""
+		if node.text:
+			text += node.text
+		for child in node:
+			if child.tag == text_prefix + "span":
+				if child.attrib[text_prefix + "style-name"] in ["rststyle-emphasis"]:
+					text += "*%s*" % child.text
+
+				elif child.attrib[text_prefix + "style-name"] in ["rststyle-strong"]:
+					text += "**%s**" % child.text
+
+				else:
+					text += child.text
+
+			elif child.tag == drawing_prefix + "frame":
+				if child[0].tag == drawing_prefix + "image":
+					image = child[0]
+					path = image.attrib[xlink_prefix + "href"]
+					if path in self.picture_dict:
+						path = self.picture_dict[path]
+					path = path.replace('\\', '/')
+
+					folder, name = os.path.split(path)
+					name, ext = os.path.splitext(name)
+
+					text += "|%s|" % name
+
+					self.inline_images[path] = name
+
+			elif child.tag == text_prefix + "p":
+				text += self.getElementText(child)
+
+			else:
+				print child.tag
+
+			if child.tail:
+				text += child.tail
+
+		text = text.replace("\n", " ")
+		return text
+
+	def transformTableNode(self, table_node):
+		table = Table()
+		column_sizes = []
+
+		for child in table_node:
+			header = False
+			row_node = child
+			if child.tag == table_prefix + "table-header-rows":
+				header = True
+				row_node = child[0]
+
+			if row_node.tag != table_prefix + "table-row":
+				continue
+
+			row = TableRow()
+			table.rows.append(row)
+
+			for cell_node in row_node:
+				cell = TableCell()
+				if cell_node.tag != table_prefix + "table-cell":
+					continue
+				row.cells.append(cell)
+
+				cell.h_span = int(cell_node.attrib.get(table_prefix + "number-columns-spanned", 1))
+				cell.v_span = int(cell_node.attrib.get(table_prefix + "number-rows-spanned", 1))
+				cell.text = self.getElementText(cell_node[0])
+				cell.text = escapeCellText(cell.text)
+
+		self.writeTable(table)
+
+	def transformNode(self, node):
+		for child in node:
+			if child.tag == text_prefix + "p":
+				style = child.attrib[text_prefix + "style-name"]
+				frame = child.find(drawing_prefix + "frame")
+				comment = child.find(office_prefix + "annotation")
+
+				if style == "rststyle-title":
+					self.writeTitle(child.text, 0)
+
+				elif style == "rststyle-admon-note-hdr":
+					self.writeNoteHeader()
+
+				elif style == "rststyle-admon-note-body":
+					self.appendToNote(self.getElementText(child))
+
+				elif style == "rststyle-admon-warning-hdr":
+					self.writeWarningHeader()
+
+				elif style == "rststyle-admon-warning-body":
+					self.appendToWarning(self.getElementText(child))
+
+				elif style == "rststyle-blockindent":
+					self.writeDefinitionBody(self.getElementText(child))
+
+				elif style == "rststyle-codeblock":
+					self.writeCodeBlock(getCodeText(child))
+
+				elif frame and frame.attrib[text_prefix + "anchor-type"] == "paragraph":
+					if frame[0].tag == drawing_prefix + "image":
+						image = frame[0]
+						path = image.attrib[xlink_prefix + "href"]
+						self.writeImage(path)
+
+					elif frame[0].tag == drawing_prefix + "text-box":
+						try:
+							text_box = frame[0]
+							paragraph = text_box[0]
+							frame = paragraph[0]
+							image = frame[0]
+							path = image.attrib[xlink_prefix + "href"]
+							legend = frame.tail
+
+							self.writeFigure(path, legend)
+						except:
+							print "fail to convert the figure"
+
+				elif comment:
+					try:
+						text = getRawText(comment)
+
+						self.writeComment(text)
+					except:
+						print "fail to find the comment"
+
+				else:
+					#self.write("\n")
+					self.writeParagraph(self.getElementText(child))
+
+			if child.tag == text_prefix + "h":
+				level = int(child.attrib[text_prefix + "outline-level"])
+				self.writeTitle(self.getElementText(child), level)
+
+			if child.tag == text_prefix + "section":
+				self.transformNode(child)
+
+			if child.tag == text_prefix + "list":
+				if child.attrib.get(text_prefix + "style-name", "") == "Outline":
+					item = child[0]
+					while item._children:
+						if item[0].tag == text_prefix + "h":
+							self.transformNode(item)
+							break;
+						item = item[0]
+
+				else:
+					if child.attrib[text_prefix + "style-name"] == "rststyle-blockquote-enumlist":
+						self.list_indexes.append(0)
+					else:
+						self.list_indexes.append(-1)
+
+					self.write("\n")
+					self.list_levels.append(True)
+					self.transformNode(child)
+					#self.write("\n")
+					self.list_levels.pop()
+					self.list_indexes.pop()
+
+			if child.tag == text_prefix + "list-item":
+				self.list_levels[-1] = True # Make sure the first paragraph get its bullet mark.
+
+				# Update the item index of the item:
+				if self.list_indexes[-1] >= 0:
+					self.list_indexes[-1] += 1
+
+				self.transformNode(child)
+				#self.writeListItem(self.getElementText(child))
+
+			if child.tag == table_prefix + "table":
+				self.transformTableNode(child)
+
+
+class Table:
+	def __init__(self):
+		self.rows = []
+
+	def __str__(self):
+		ret = "Table(\n"
+		ret += "  rows : [\n"
+		for row in self.rows:
+			ret += str(row) + ",\n"
+		ret += "  ]\n"
+		ret += ")\n"
+
+		return ret
 
 	def addCoveredCells(self):
 		num_columns = 0
@@ -528,192 +713,11 @@ class TableCell:
 		return ret
 
 
-def escapeCellText(text):
-	text = text.replace("+", "\\+")
-	text = text.replace("-", "\\-")
-	return text
-
-
-def writeTable(context, table_node):
-	table = Table()
-	column_sizes = []
-
-	for child in table_node:
-		header = False
-		row_node = child
-		if child.tag == table_prefix + "table-header-rows":
-			header = True
-			row_node = child[0]
-
-		if row_node.tag != table_prefix + "table-row":
-			continue
-
-		row = TableRow()
-		table.rows.append(row)
-
-		for cell_node in row_node:
-			cell = TableCell()
-			if cell_node.tag != table_prefix + "table-cell":
-				continue
-			row.cells.append(cell)
-
-			cell.h_span = int(cell_node.attrib.get(table_prefix + "number-columns-spanned", 1))
-			cell.v_span = int(cell_node.attrib.get(table_prefix + "number-rows-spanned", 1))
-			cell.text = getElementText(context, cell_node[0])
-			cell.text = escapeCellText(cell.text)
-
-	table.writeTable(context)
-
-
-def transform(context, element):
-	for child in element:
-		if child.tag == text_prefix + "p":
-			style = child.attrib[text_prefix + "style-name"]
-			frame = child.find(drawing_prefix + "frame")
-			comment = child.find(office_prefix + "annotation")
-
-			if style == "rststyle-title":
-				context.writeTitle(child.text, 0)
-
-			elif style == "rststyle-admon-note-hdr":
-				context.writeNoteHeader()
-
-			elif style == "rststyle-admon-note-body":
-				context.appendToNote(getElementText(context, child))
-
-			elif style == "rststyle-admon-warning-hdr":
-				context.writeWarningHeader()
-
-			elif style == "rststyle-admon-warning-body":
-				context.appendToWarning(getElementText(context, child))
-
-			elif style == "rststyle-blockindent":
-				context.writeDefinitionBody(getElementText(context, child))
-
-			elif style == "rststyle-codeblock":
-				context.writeCodeBlock(getCodeText(child))
-
-			elif frame and frame.attrib[text_prefix + "anchor-type"] == "paragraph":
-				if frame[0].tag == drawing_prefix + "image":
-					image = frame[0]
-					path = image.attrib[xlink_prefix + "href"]
-					context.writeImage(path)
-
-				elif frame[0].tag == drawing_prefix + "text-box":
-					try:
-						text_box = frame[0]
-						paragraph = text_box[0]
-						frame = paragraph[0]
-						image = frame[0]
-						path = image.attrib[xlink_prefix + "href"]
-						legend = frame.tail
-
-						context.writeFigure(path, legend)
-					except:
-						print "fail to convert the figure"
-
-			elif comment:
-				try:
-					text = getRawText(comment)
-
-					context.writeComment(text)
-				except:
-					print "fail to find the comment"
-
-			else:
-				#context.write("\n")
-				context.writeParagraph(getElementText(context, child))
-
-		if child.tag == text_prefix + "h":
-			level = int(child.attrib[text_prefix + "outline-level"])
-			context.writeTitle(getElementText(context, child), level)
-
-		if child.tag == text_prefix + "section":
-			transform(context, child)
-
-		if child.tag == text_prefix + "list":
-			if child.attrib.get(text_prefix + "style-name", "") == "Outline":
-				item = child[0]
-				while item._children:
-					if item[0].tag == text_prefix + "h":
-						transform(context, item)
-						break;
-					item = item[0]
-
-			else:
-				if child.attrib[text_prefix + "style-name"] == "rststyle-blockquote-enumlist":
-					context.list_indexes.append(0)
-				else:
-					context.list_indexes.append(-1)
-					
-				context.write("\n")
-				context.list_levels.append(True)
-				transform(context, child)
-				#context.write("\n")
-				context.list_levels.pop()
-				context.list_indexes.pop()
-
-		if child.tag == text_prefix + "list-item":
-			context.list_levels[-1] = True # Make sure the first paragraph get its bullet mark.
-			
-			# Update the item index of the item:
-			if context.list_indexes[-1] >= 0:
-				context.list_indexes[-1] += 1
-				
-			transform(context, child)
-			#context.writeListItem(getElementText(context, child))
-
-		if child.tag == table_prefix + "table":
-			writeTable(context, child)
-
-
 def odt2rst(input_path, output_path, images_relative_folder = "images", temp_folder = ".", clean = True):
 	odt_pictures_hashes = unpackOdt(input_path, temp_folder)
-	
-	output_folder, output_name = os.path.split(output_path)
-	image_folder = os.path.join(output_folder, images_relative_folder)
-	
-	hashes_rst_images = getHashesRstImages(output_folder, images_relative_folder)
 
-	# Build the picture_dict that convert odt image path into rst image path (when possible)
-	picture_prefix = "picture_"
-	existing_picture_names = []
-	if os.path.isdir(image_folder):
-		for path in os.listdir(image_folder):
-			path = path.lower()
-			name, ext = os.path.splitext(path)
-			if ext not in [".png", ".jpg"]:
-				continue
-	
-			if not name.startswith(picture_prefix):
-				continue
-	
-			existing_picture_names.append(name)
-			
-	picture_dict = {}
-	picture_index = 0
-	for path in odt_pictures_hashes:
-		h = odt_pictures_hashes[path]
-		if h in hashes_rst_images:
-			picture_dict[path] = hashes_rst_images[h]
-		else:
-			# Find an available picture name:
-			while picture_prefix + str(picture_index) in existing_picture_names:
-				picture_index += 1
-				
-			picture_name = picture_prefix + str(picture_index)
-			existing_picture_names.append(picture_name)
-			
-			name, ext = os.path.splitext(path)
-			picture_relative_path = os.path.join(images_relative_folder, picture_name) + ext
+	picture_dict = synchronizeImagesFolders(temp_folder, output_path, images_relative_folder, odt_pictures_hashes)
 
-			if not os.path.isdir(image_folder):
-				os.mkdir(image_folder)
-				
-			shutil.copyfile(os.path.join(temp_folder, path), os.path.join(output_folder, picture_relative_path))
-			
-			picture_dict[path] = picture_relative_path
-			
 	content_path = os.path.join(temp_folder, "content.xml")
 	styles_path = os.path.join(temp_folder, "styles.xml")
 
@@ -727,7 +731,7 @@ def odt2rst(input_path, output_path, images_relative_folder = "images", temp_fol
 	context.picture_dict = picture_dict
 
 	context.open()
-	transform(context, text)
+	context.transformNode(text)
 	context.close()
 
 	if clean:
@@ -761,7 +765,7 @@ def main():
 
 		if o in ["--temp"]:
 			temp_folder = v
-			
+
 		if o in ["--do-not-clean"]:
 			clean = False
 
