@@ -545,7 +545,6 @@ class RstDocument:
 			self.write(body)
 			
 			previous_header = row.header
-			print row.header
 
 		self.write(bottom)		
 
@@ -560,6 +559,9 @@ class RstDocument:
 
 				elif child.attrib[text_prefix + "style-name"] in ["rststyle-strong"]:
 					text += "**%s**" % child.text
+					
+				elif child.attrib[text_prefix + "style-name"] in ["rststyle-inlineliteral"]:
+					text += "``%s``" % child.text
 
 				else:
 					text += child.text
@@ -600,7 +602,6 @@ class RstDocument:
 			row_node = child
 			if child.tag == table_prefix + "table-header-rows":
 				header = True
-				print "header"
 				row_node = child[0]
 
 			if row_node.tag != table_prefix + "table-row":
