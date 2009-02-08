@@ -8,11 +8,14 @@ import math
 import getopt
 import xml.etree.ElementTree
 
-office_prefix = "{urn:oasis:names:tc:opendocument:xmlns:office:1.0}"
-text_prefix = "{urn:oasis:names:tc:opendocument:xmlns:text:1.0}"
-table_prefix = "{urn:oasis:names:tc:opendocument:xmlns:table:1.0}"
-drawing_prefix = "{urn:oasis:names:tc:opendocument:xmlns:drawing:1.0}"
-xlink_prefix = "{http://www.w3.org/1999/xlink}"
+office_prefix   =  "{urn:oasis:names:tc:opendocument:xmlns:office:1.0}"
+text_prefix     =  "{urn:oasis:names:tc:opendocument:xmlns:text:1.0}"
+table_prefix    =  "{urn:oasis:names:tc:opendocument:xmlns:table:1.0}"
+drawing_prefix  =  "{urn:oasis:names:tc:opendocument:xmlns:drawing:1.0}"
+style_prefix    =  "{urn:oasis:names:tc:opendocument:xmlns:style:1.0}"
+fo_prefix       =  "{urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0}"
+
+xlink_prefix    =  "{http://www.w3.org/1999/xlink}"
 
 debug_flag = False
 
@@ -33,7 +36,7 @@ def unpackOdt(input_path, temp_folder = "."):
 
 	odt_pictures_hashes = {}
 	for path in odtfile.namelist():
-		if path.lower() == "content.xml".lower():
+		if path.lower() in ["content.xml", "styles.xml"]:
 			g = open(os.path.join(temp_folder, path), "wb")
 			bytes = odtfile.read(path)
 			g.write(bytes)
@@ -135,12 +138,111 @@ def synchronizeImagesFolders(temp_folder, output_path, images_relative_folder, o
 			picture_dict[path] = picture_relative_path
 
 	return picture_dict
+	
+	
+class Style:
+	def __init__(self):
+		self.name = ""
+		self.parent_name = ""
+		self.family = ""
+		
+		self.margin_left = 0
+		
+		self.font_style = ""
+		self.font_weight = ""
+		
+	def translateNode(self, node):
+		self.name = node.attrib[style_prefix + "name"]
+		self.parent_name = node.attrib.get(style_prefix + "parent-style-name", "")
+		self.family = node.attrib.get(style_prefix + "family", "")
+		
+		for child in node:
+			if child.tag == style_prefix + "paragraph-properties":
+				self.margin_left = child.attrib.get(fo_prefix + "margin-left", "0in")
+				if self.margin_left.endswith("in"):
+					self.margin_left = float(self.margin_left[:-2])
+				else:
+					raise Exception("unknown mesure: '%s'" % self.margin_left)
+					
+			if child.tag == style_prefix + "text-properties":
+				self.font_style = child.attrib.get(fo_prefix + "font-style", "")
+				self.font_weight = child.attrib.get(fo_prefix + "font-weight", "")
+				
+	def isBold(self):
+		if self.family != "text":
+			return False
+			
+		if self.font_weight == "bold":
+			return True
+			
+		return False
+				
+	def isItalic(self):
+		if self.family != "text":
+			return False
+			
+		if self.font_style == "italic":
+			return True
+			
+		return False				
+				
+	def __str__(self):
+		ret = "Style("
+		ret += '\tName : "%s"\n' % self.name
+		ret += '\tParent-Name : "%s"\n' % self.parent_name
+		ret += '\tFamily : "%s"\n' % self.family
+		ret += '\tMargin-Left : %f\n' % self.margin_left
+		ret += '\tFont-Style : "%s"\n' % self.font_style
+		ret += '\tFont-Weight : "%s"\n' % self.font_weight
+		ret += ")\n"
+		
+		return ret
+
+
+def extractStylesFromNode(node):
+	ret = {}
+	for child in node:
+		if child.tag != style_prefix + "style":
+			continue
+			
+		style = Style()
+		style.translateNode(child)
+		
+		ret[style.name] = style
+		
+	return ret
+
+
+def extractStylesFromRoot(root):
+	ret = {}
+	automatic_styles = root.find(office_prefix + "automatic-styles")
+	if automatic_styles:
+		ret.update(extractStylesFromNode(automatic_styles))
+	
+	styles = root.find(office_prefix + "styles")
+	if styles:
+		ret.update(extractStylesFromNode(styles))
+	
+	return ret
+	
+		
+class ListInfo:
+	def __init__(self):
+		# Set to True when the '-', '#.' or '1.' have been inserted in the rst document.
+		self.is_bullet_inserted = False 
+		
+		# Set to -1 if the list is a bulleted list and to the current item index if the list is a numbered list.
+		self.current_index = -1 
+		
+		# Keep the identation level of list item (to be able to start a new sublist or to stop the list when the identation change)
+		self.identation = 0
 
 
 def splitIntoLines(text):
 	text = re.sub(r"([a-zA-Z\"']{2})\. ", r"\1.\n", text)
 
 	return text
+
 
 def getRawText(node):
 	text = ""
@@ -179,15 +281,15 @@ def getCodeText(node):
 
 	return text
 
-	
+
 def escapeCellText(text):
 	"Return a rst version of the text that is suitable for rst cell content."
 	text = text.replace("+", "\\+")
 	text = text.replace("-", "\\-")
 	text = text.replace("|", "\\|")
 	return text
-	
-	
+
+
 class Table:
 	def __init__(self):
 		self.rows = []
@@ -301,7 +403,7 @@ class TableCell:
 		ret += ")\n"
 
 		return ret
-	
+
 
 class RstDocument:
 	# Set here the char that should be used to underline the titles according to they levels.
@@ -312,6 +414,8 @@ class RstDocument:
 	def __init__(self, path = ""):
 		self.path = path
 		self.file = None
+		
+		self.styles = {}
 
 		self.list_levels = []
 		self.list_indexes = []
@@ -473,7 +577,7 @@ class RstDocument:
 		while text:
 			self.write("   " + text.pop(0) + "\n")
 		self.write("\n")
-		
+
 	def writeTable(self, table):
 		self.write("\n")
 
@@ -543,24 +647,35 @@ class RstDocument:
 
 			self.write(top)
 			self.write(body)
-			
+
 			previous_header = row.header
 
-		self.write(bottom)		
+		self.write(bottom)
 
 	def getElementText(self, node):
 		text = ""
 		if node.text:
 			text += node.text
+			
 		for child in node:
 			if child.tag == text_prefix + "span":
-				if child.attrib[text_prefix + "style-name"] in ["rststyle-emphasis"]:
-					text += "*%s*" % child.text
-
-				elif child.attrib[text_prefix + "style-name"] in ["rststyle-strong"]:
+				style_name = child.attrib[text_prefix + "style-name"]
+				style = self.styles.get(style_name, None)
+				if style_name == "rststyle-strong":
 					text += "**%s**" % child.text
 					
-				elif child.attrib[text_prefix + "style-name"] in ["rststyle-inlineliteral"]:
+				elif style_name == "rststyle-emphasis":
+					text += "*%s*" % child.text
+
+				elif style.isBold():
+					# TODO: we should check the attributes of the rststyle-strong and rststyle-emphasis styles.
+					text += "**%s**" % child.text
+
+				elif style.isItalic():
+					# TODO: we should check the attributes of the rststyle-strong and rststyle-emphasis styles.
+					text += "*%s*" % child.text
+
+				elif style_name in ["rststyle-inlineliteral"]:
 					text += "``%s``" % child.text
 
 				else:
@@ -724,14 +839,33 @@ class RstDocument:
 
 			if child.tag == table_prefix + "table":
 				self.transformTableNode(child)
-				
+
 	def transform(self, content_path, styles_path, picture_dict):
 		self.picture_dict = picture_dict
 		
+		styles = {}
+		
+		if os.path.isfile(styles_path):
+			parser = xml.etree.ElementTree.XMLTreeBuilder()
+			doc = xml.etree.ElementTree.parse(styles_path, parser)
+			root = doc.getroot()
+			
+			styles.update(extractStylesFromRoot(root))
+
 		parser = xml.etree.ElementTree.XMLTreeBuilder()
 		doc = xml.etree.ElementTree.parse(content_path, parser)
-	
-		body = doc.find(office_prefix + "body")
+		root = doc.getroot()
+		
+		styles.update(extractStylesFromRoot(root))
+		
+		self.styles = styles
+		
+#		f = open("styles.tsn", "w")
+#		for style in styles:
+#			f.write(str(styles[style]))
+#		f.close()
+
+		body = root.find(office_prefix + "body")
 		text = body.find(office_prefix + "text")
 
 		self.open()
@@ -790,7 +924,8 @@ def main():
 		input_file = args[0]
 
 	if input_file == "":
-		usage()
+		help()
+		return
 
 	name, ext = os.path.splitext(input_file)
 	output_file = name + ".rst"
