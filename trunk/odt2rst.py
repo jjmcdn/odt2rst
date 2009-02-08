@@ -138,24 +138,24 @@ def synchronizeImagesFolders(temp_folder, output_path, images_relative_folder, o
 			picture_dict[path] = picture_relative_path
 
 	return picture_dict
-	
-	
+
+
 class Style:
 	def __init__(self):
 		self.name = ""
 		self.parent_name = ""
 		self.family = ""
-		
+
 		self.margin_left = 0
-		
+
 		self.font_style = ""
 		self.font_weight = ""
-		
+
 	def translateNode(self, node):
 		self.name = node.attrib[style_prefix + "name"]
 		self.parent_name = node.attrib.get(style_prefix + "parent-style-name", "")
 		self.family = node.attrib.get(style_prefix + "family", "")
-		
+
 		for child in node:
 			if child.tag == style_prefix + "paragraph-properties":
 				self.margin_left = child.attrib.get(fo_prefix + "margin-left", "0in")
@@ -163,29 +163,29 @@ class Style:
 					self.margin_left = float(self.margin_left[:-2])
 				else:
 					raise Exception("unknown mesure: '%s'" % self.margin_left)
-					
+
 			if child.tag == style_prefix + "text-properties":
 				self.font_style = child.attrib.get(fo_prefix + "font-style", "")
 				self.font_weight = child.attrib.get(fo_prefix + "font-weight", "")
-				
+
 	def isBold(self):
 		if self.family != "text":
 			return False
-			
+
 		if self.font_weight == "bold":
 			return True
-			
+
 		return False
-				
+
 	def isItalic(self):
 		if self.family != "text":
 			return False
-			
+
 		if self.font_style == "italic":
 			return True
-			
-		return False				
-				
+
+		return False
+
 	def __str__(self):
 		ret = "Style("
 		ret += '\tName : "%s"\n' % self.name
@@ -195,7 +195,7 @@ class Style:
 		ret += '\tFont-Style : "%s"\n' % self.font_style
 		ret += '\tFont-Weight : "%s"\n' % self.font_weight
 		ret += ")\n"
-		
+
 		return ret
 
 
@@ -204,12 +204,12 @@ def extractStylesFromNode(node):
 	for child in node:
 		if child.tag != style_prefix + "style":
 			continue
-			
+
 		style = Style()
 		style.translateNode(child)
-		
+
 		ret[style.name] = style
-		
+
 	return ret
 
 
@@ -218,22 +218,28 @@ def extractStylesFromRoot(root):
 	automatic_styles = root.find(office_prefix + "automatic-styles")
 	if automatic_styles:
 		ret.update(extractStylesFromNode(automatic_styles))
-	
+
 	styles = root.find(office_prefix + "styles")
 	if styles:
 		ret.update(extractStylesFromNode(styles))
-	
+
 	return ret
 	
-		
+	
 class ListInfo:
 	def __init__(self):
+		self.style_name = ""
+		self.levels = []
+
+
+class ListLevelInfo:
+	def __init__(self):
 		# Set to True when the '-', '#.' or '1.' have been inserted in the rst document.
-		self.is_bullet_inserted = False 
-		
+		self.is_bullet_inserted = False
+
 		# Set to -1 if the list is a bulleted list and to the current item index if the list is a numbered list.
-		self.current_index = -1 
-		
+		self.current_index = -1
+
 		# Keep the identation level of list item (to be able to start a new sublist or to stop the list when the identation change)
 		self.identation = 0
 
@@ -414,16 +420,26 @@ class RstDocument:
 	def __init__(self, path = ""):
 		self.path = path
 		self.file = None
-		
+
 		self.styles = {}
 
-		self.list_levels = []
-		self.list_indexes = []
+		self.lists = []
+		# Keep the list levels info to merge consecutive lists:
+		self.last_levels = []
 
 		self.picture_dict = {}
 
 		self.inline_images = {}
 		self.paragraphs = []
+		
+	def getLastListLevel(self):
+		return self.lists[-1].levels[-1]
+		
+	def getAllListLevels(self):
+		ret = []
+		for list_info in self.lists:
+			ret += list_info.levels
+		return ret
 
 	def flush(self):
 		for paragraph in self.paragraphs:
@@ -474,12 +490,13 @@ class RstDocument:
 			return
 
 		paragraph = ""
-		if not self.list_levels:
+		if not self.lists:
 			if debug_flag:
 				paragraph += "pre-para"
 			paragraph += "\n"
 
-		elif not self.list_levels[-1]:
+		elif self.getLastListLevel().is_bullet_inserted:
+			# A new paragraph in a list item needs a blank line to mark the separation with the previous one.
 			if debug_flag:
 				paragraph += "pre-item"
 			paragraph += "\n"
@@ -487,26 +504,25 @@ class RstDocument:
 		identation = ""
 		bullet = ""
 		non_bullet = ""
-		if self.list_levels:
-			if self.list_indexes[-1] >= 0:
+		if self.lists:
+			if self.getLastListLevel().current_index >= 0:
 				bullet = "    "
 				non_bullet = "    "
-				if self.list_levels[-1]:
-					bullet = " %d. " % (self.list_indexes[-1] % 10)
+				if not self.getLastListLevel().is_bullet_inserted:
+					bullet = " %d. " % (self.getLastListLevel().current_index % 10)
 			else:
 				bullet = "   "
 				non_bullet = "   "
-				if self.list_levels[-1]:
+				if not self.getLastListLevel().is_bullet_inserted:
 					bullet = " - "
 
-			self.list_levels[-1] = False
+			self.getLastListLevel().is_bullet_inserted = True
 
-			for i in self.list_indexes[:-1]:
-				if i >= 0:
+			for list_level_info in self.getAllListLevels()[:-1]:
+				if list_level_info.current_index >= 0:
 					identation += "    "
 				else:
 					identation += "   "
-			#identation = "   " * (len(self.list_levels) - 1)
 
 		text = splitIntoLines(text)
 		text = text.split("\n")
@@ -656,14 +672,14 @@ class RstDocument:
 		text = ""
 		if node.text:
 			text += node.text
-			
+
 		for child in node:
 			if child.tag == text_prefix + "span":
 				style_name = child.attrib[text_prefix + "style-name"]
 				style = self.styles.get(style_name, None)
 				if style_name == "rststyle-strong":
 					text += "**%s**" % child.text
-					
+
 				elif style_name == "rststyle-emphasis":
 					text += "*%s*" % child.text
 
@@ -742,6 +758,9 @@ class RstDocument:
 	def transformNode(self, node):
 		for child in node:
 			if child.tag == text_prefix + "p":
+				if not self.lists:
+					self.last_levels = []
+					
 				style = child.attrib[text_prefix + "style-name"]
 				frame = child.find(drawing_prefix + "frame")
 				comment = child.find(office_prefix + "annotation")
@@ -795,7 +814,6 @@ class RstDocument:
 						print "fail to find the comment"
 
 				else:
-					#self.write("\n")
 					self.writeParagraph(self.getElementText(child))
 
 			if child.tag == text_prefix + "h":
@@ -815,51 +833,80 @@ class RstDocument:
 						item = item[0]
 
 				else:
-					if child.attrib[text_prefix + "style-name"] == "rststyle-blockquote-enumlist":
-						self.list_indexes.append(0)
-					else:
-						self.list_indexes.append(-1)
-
-					self.write("\n")
-					self.list_levels.append(True)
+					list_info = ListInfo()
+					list_info.style_name = child.attrib.get(text_prefix + "style-name", "")
+					list_info.levels = list(self.last_levels)
+					
+					self.lists.append(list_info)
 					self.transformNode(child)
-					#self.write("\n")
-					self.list_levels.pop()
-					self.list_indexes.pop()
+					self.last_levels = self.lists[-1].levels
+					self.lists.pop()
 
 			if child.tag == text_prefix + "list-item":
-				self.list_levels[-1] = True # Make sure the first paragraph get its bullet mark.
+				paragraph = child.find(text_prefix + "p")
+				style_name = paragraph.attrib.get(text_prefix + "style-name", "")
+				style = self.styles.get(style_name, None)
+				identation = 0
+				if style:
+					identation = style.margin_left
+					
+				print "identation: %f" % identation
+
+				if not self.lists[-1].levels or self.getLastListLevel().identation < identation:
+					list_level_info = ListLevelInfo()
+					
+					# Child list will be of the same kind of the parent list.
+					if self.lists[-1].style_name == "rststyle-blockquote-enumlist":
+						list_level_info.current_index = 0
+					else:
+						list_level_info.current_index = -1
+						
+					self.lists[-1].levels.append(list_level_info)
+
+					separator = ""
+					if debug_flag:
+						separator += "prelist"
+					separator += "\n"
+					self.write(separator)
+					
+				else:
+					while self.lists[-1].levels and self.getLastListLevel().identation > identation:
+						self.lists[-1].levels.pop()
+						
+					list_level_info = self.lists[-1].levels[-1]
+				
+				list_level_info.identation = identation
+				list_level_info.is_bullet_inserted = False # Make sure the first paragraph get its bullet mark.
 
 				# Update the item index of the item:
-				if self.list_indexes[-1] >= 0:
-					self.list_indexes[-1] += 1
+				if list_level_info.current_index >= 0:
+					list_level_info.current_index += 1
 
 				self.transformNode(child)
-				#self.writeListItem(self.getElementText(child))
 
 			if child.tag == table_prefix + "table":
 				self.transformTableNode(child)
 
 	def transform(self, content_path, styles_path, picture_dict):
 		self.picture_dict = picture_dict
-		
+
 		styles = {}
-		
+
 		if os.path.isfile(styles_path):
 			parser = xml.etree.ElementTree.XMLTreeBuilder()
 			doc = xml.etree.ElementTree.parse(styles_path, parser)
 			root = doc.getroot()
-			
+
 			styles.update(extractStylesFromRoot(root))
 
 		parser = xml.etree.ElementTree.XMLTreeBuilder()
 		doc = xml.etree.ElementTree.parse(content_path, parser)
 		root = doc.getroot()
-		
+
 		styles.update(extractStylesFromRoot(root))
-		
+
 		self.styles = styles
-		
+
 #		f = open("styles.tsn", "w")
 #		for style in styles:
 #			f.write(str(styles[style]))
