@@ -61,6 +61,7 @@ def unpackOdt(input_path, temp_folder = "."):
 def cleanPack(temp_folder = "."):
 	"Delete the files and folder created by unpackOdt apart from the temp_folder itself."
 	os.remove(os.path.join(temp_folder, "content.xml"))
+	os.remove(os.path.join(temp_folder, "styles.xml"))
 	shutil.rmtree(os.path.join(temp_folder, "Pictures"))
 
 
@@ -503,6 +504,7 @@ class RstDocument:
 			if debug_flag:
 				text += "endof para"
 			text += "\n"
+			text = text.encode("utf8")
 			self.file.write(text)
 
 		self.paragraphs = []
@@ -517,11 +519,13 @@ class RstDocument:
 
 		for path in self.inline_images:
 			name = self.inline_images[path]
-			self.file.write("\n.. |%s| image:: %s\n" % (name, path))
+			text = "\n.. |%s| image:: %s\n" % (name, path)
+			text = text.encode("utf8")
+			self.file.write(text)
 
 		self.file.close()
 
-	def write(self, s):
+	def write(self, text):
 		self.flush()
 
 		s = s.encode("utf8")
@@ -901,8 +905,12 @@ class RstDocument:
 
 			if child.tag == text_prefix + "list-item":
 				paragraph = child.find(text_prefix + "p")
-				style_name = paragraph.attrib.get(text_prefix + "style-name", "")
-				style = self.styles.get(style_name, None)
+				
+				style = None
+				if paragraph != None:
+					style_name = paragraph.attrib.get(text_prefix + "style-name", "")
+					style = self.styles.get(style_name, None)
+				
 				identation = 0
 				if style:
 					identation = style.margin_left
@@ -910,11 +918,15 @@ class RstDocument:
 				if not self.lists[-1].levels or self.getLastListLevel().identation < identation:
 					list_level_info = ListLevelInfo()
 					
+					list_level_style = None
 					list_info = self.lists[-1]
 					list_style = self.list_styles.get(list_info.style_name, None)
-					if not list_style:
-						raise Exception('Unkown list style: "%s"' % list_info.style_name)
-					list_level_style = list_style.levels[len(self.lists[-1].levels)]
+					if list_style:
+						list_level_style = list_style.levels[len(self.lists[-1].levels)]
+					elif list_info.style_name == "":
+						print 'This probably mean uncorrect rst list'
+					else:
+						print 'Unknown list style: "%s"' % list_info.style_name
 
 					# Child list will be of the same kind of the parent list.
 					if self.lists[-1].style_name == "rststyle-blockquote-enumlist":
