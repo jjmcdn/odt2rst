@@ -528,10 +528,10 @@ class RstDocument:
 	def write(self, text):
 		self.flush()
 
-		s = s.encode("utf8")
-#		if s == "\n":
+		text = text.encode("utf8")
+#		if text == "\n":
 #			raise Exception("hidden return")
-		self.file.write(s)
+		self.file.write(text)
 
 	def writeTitle(self, text, level):
 		paragraph = ""
