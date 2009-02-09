@@ -226,6 +226,61 @@ def extractStylesFromRoot(root):
 	return ret
 	
 	
+class ListLevelStyle:
+	def __init__(self):
+		self.num_format = ""
+		
+	def translateNode(self, node):
+		if node.tag == text_prefix + "list-level-style-number":
+			self.num_format = node.attrib.get(style_prefix + "num-format", "")
+
+
+class ListStyle:
+	def __init__(self):
+		self.name = ""
+		self.levels = []
+		
+	def translateNode(self, node):
+		self.name  = node.attrib.get(style_prefix + "name", "")
+		#print self.name
+		for child in node:
+			if child.tag not in [text_prefix + "list-level-style-number", text_prefix + "list-level-style-bullet"]:
+				print child.tag
+				continue
+				
+			list_level_style = ListLevelStyle()
+			self.levels.append(list_level_style)
+			
+			list_level_style.translateNode(child)
+		
+def extractListStylesFromNode(node):
+	ret = {}
+	for child in node:
+		if child.tag != text_prefix + "list-style":
+			#print child.tag
+			continue
+
+		style = ListStyle()
+		style.translateNode(child)
+
+		ret[style.name] = style
+
+	return ret
+		
+		
+def extractListStylesFromRoot(root):
+	ret = {}
+	automatic_styles = root.find(office_prefix + "automatic-styles")
+	if automatic_styles:
+		ret.update(extractListStylesFromNode(automatic_styles))
+
+	styles = root.find(office_prefix + "styles")
+	if styles:
+		ret.update(extractListStylesFromNode(styles))
+
+	return ret		
+
+
 class ListInfo:
 	def __init__(self):
 		self.style_name = ""
@@ -422,6 +477,7 @@ class RstDocument:
 		self.file = None
 
 		self.styles = {}
+		self.list_styles = {}
 
 		self.lists = []
 		# Keep the list levels info to merge consecutive lists:
@@ -431,10 +487,10 @@ class RstDocument:
 
 		self.inline_images = {}
 		self.paragraphs = []
-		
+
 	def getLastListLevel(self):
 		return self.lists[-1].levels[-1]
-		
+
 	def getAllListLevels(self):
 		ret = []
 		for list_info in self.lists:
@@ -760,7 +816,7 @@ class RstDocument:
 			if child.tag == text_prefix + "p":
 				if not self.lists:
 					self.last_levels = []
-					
+
 				style = child.attrib[text_prefix + "style-name"]
 				frame = child.find(drawing_prefix + "frame")
 				comment = child.find(office_prefix + "annotation")
@@ -824,7 +880,8 @@ class RstDocument:
 				self.transformNode(child)
 
 			if child.tag == text_prefix + "list":
-				if child.attrib.get(text_prefix + "style-name", "") == "Outline":
+				style_name = child.attrib.get(text_prefix + "style-name", "")
+				if style_name == "Outline":
 					item = child[0]
 					while item._children:
 						if item[0].tag == text_prefix + "h":
@@ -834,9 +891,9 @@ class RstDocument:
 
 				else:
 					list_info = ListInfo()
-					list_info.style_name = child.attrib.get(text_prefix + "style-name", "")
+					list_info.style_name = style_name
 					list_info.levels = list(self.last_levels)
-					
+
 					self.lists.append(list_info)
 					self.transformNode(child)
 					self.last_levels = self.lists[-1].levels
@@ -849,18 +906,29 @@ class RstDocument:
 				identation = 0
 				if style:
 					identation = style.margin_left
-					
-				print "identation: %f" % identation
 
 				if not self.lists[-1].levels or self.getLastListLevel().identation < identation:
 					list_level_info = ListLevelInfo()
 					
+					list_info = self.lists[-1]
+					list_style = self.list_styles.get(list_info.style_name, None)
+					if not list_style:
+						raise Exception('Unkown list style: "%s"' % list_info.style_name)
+					list_level_style = list_style.levels[len(self.lists[-1].levels)]
+
 					# Child list will be of the same kind of the parent list.
 					if self.lists[-1].style_name == "rststyle-blockquote-enumlist":
 						list_level_info.current_index = 0
+						
+					elif self.lists[-1].style_name == "rststyle-blockquote-bulletlist":
+						list_level_info.current_index = -1
+
+					elif list_level_style.num_format != "":
+						list_level_info.current_index = 0
+						
 					else:
 						list_level_info.current_index = -1
-						
+
 					self.lists[-1].levels.append(list_level_info)
 
 					separator = ""
@@ -868,13 +936,13 @@ class RstDocument:
 						separator += "prelist"
 					separator += "\n"
 					self.write(separator)
-					
+
 				else:
 					while self.lists[-1].levels and self.getLastListLevel().identation > identation:
 						self.lists[-1].levels.pop()
-						
+
 					list_level_info = self.lists[-1].levels[-1]
-				
+
 				list_level_info.identation = identation
 				list_level_info.is_bullet_inserted = False # Make sure the first paragraph get its bullet mark.
 
@@ -891,6 +959,7 @@ class RstDocument:
 		self.picture_dict = picture_dict
 
 		styles = {}
+		list_styles = {}
 
 		if os.path.isfile(styles_path):
 			parser = xml.etree.ElementTree.XMLTreeBuilder()
@@ -898,14 +967,17 @@ class RstDocument:
 			root = doc.getroot()
 
 			styles.update(extractStylesFromRoot(root))
+			list_styles.update(extractListStylesFromRoot(root))
 
 		parser = xml.etree.ElementTree.XMLTreeBuilder()
 		doc = xml.etree.ElementTree.parse(content_path, parser)
 		root = doc.getroot()
 
 		styles.update(extractStylesFromRoot(root))
+		list_styles.update(extractListStylesFromRoot(root))
 
 		self.styles = styles
+		self.list_styles = list_styles
 
 #		f = open("styles.tsn", "w")
 #		for style in styles:
