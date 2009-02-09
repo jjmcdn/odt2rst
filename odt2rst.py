@@ -935,7 +935,7 @@ class RstDocument:
 					elif self.lists[-1].style_name == "rststyle-blockquote-bulletlist":
 						list_level_info.current_index = -1
 
-					elif list_level_style.num_format != "":
+					elif list_level_style and list_level_style.num_format != "":
 						list_level_info.current_index = 0
 						
 					else:
