@@ -346,8 +346,8 @@ class ListLevelInfo:
 
 def splitIntoLines(text, wrap_width):
     if wrap_width <= 0:
-        text = re.sub(r"([a-zA-Z\"']{2})\. ", r"\1.\n", text)
-        text = text.replace("). ", ").\n")
+        text = re.sub(r"([a-zA-Z]{2})\. +", r"\1.\n", text)
+        text = re.sub(r"([\)\]\"'`\*])\. +", r"\1.\n", text)
     else:
         text = textwrap.fill(text, wrap_width)
     return text
@@ -599,6 +599,9 @@ class RstDocument:
 
         if text.startswith("Unknown interpreted text role"):
             return
+            
+#        if text.startswith("Unknown directive type"):
+#            return
 
         paragraph = ""
         if DEBUG_FLAG:
