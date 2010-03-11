@@ -831,7 +831,8 @@ class RstDocument:
                     text += "``%s``" % child.text
 
                 else:
-                    text += child.text
+                    if child.text is not None:
+                        text += child.text
 
             elif child.tag == drawing_prefix + "frame":
                 if child[0].tag == drawing_prefix + "image":
